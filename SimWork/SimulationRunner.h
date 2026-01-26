@@ -7,7 +7,7 @@
 #include <memory>
 #include "MaterialMapper.h"
 #include "solver/cuda_Simulation_Engine.h"
-#include "../Common.h" 
+#include "Common.h" 
 
 // 存储目标切面的测量数据（真实值）
 struct TargetSliceData {
