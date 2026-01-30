@@ -7,23 +7,42 @@
 
 class ProcessUtils {
 public:
-    // 启动外部 Worker，超时则杀进程
-    static double runWorker(const std::string& workerExe, const std::vector<double>& params, int timeoutMs) {
+    // [修改] 增加 stentTypeStr 参数
+    static double runWorker(
+        const std::string& workerExe,
+        const std::string& meshRoot,
+        const std::string& outputRoot,
+        const std::string& stentTypeStr, // 新增：支架型号字符串
+        const std::vector<double>& params,
+        int timeoutMs)
+    {
         std::string inputFile = "temp_in.txt";
         std::string outputFile = "temp_out.txt";
-        double penalty = 1e6; // 失败/超时惩罚值
+        double penalty = 1e9;
 
         // 1. 写参数到临时文件
         {
             std::ofstream out(inputFile);
-            // 写入参数个数，方便读取校验
-            out << params.size() << std::endl;
-            for (double p : params) out << p << " ";
+            if (out.is_open()) {
+                // [协议修改] 头部写入环境配置
+                out << meshRoot << std::endl;
+                out << outputRoot << std::endl;
+                out << stentTypeStr << std::endl; // 写入支架型号
+
+                // 写入优化参数
+                out << params.size() << std::endl;
+                for (double p : params) out << p << " ";
+                out.close();
+            }
+            else {
+                std::cerr << "[Process] Failed to write input file." << std::endl;
+                return penalty;
+            }
         }
-        // 删除旧的输出文件，防止读取到上一次的结果
+
         DeleteFileA(outputFile.c_str());
 
-        // 2. 组装命令: SimWorker.exe temp_in.txt temp_out.txt
+        // 2. 组装命令
         std::string cmd = workerExe + " " + inputFile + " " + outputFile;
 
         // 3. 启动进程
@@ -31,40 +50,33 @@ public:
         PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
-        ZeroMemory(&pi, sizeof(pi));
-
-        // 显式要求显示窗口
         si.dwFlags = STARTF_USESHOWWINDOW;
         si.wShowWindow = SW_SHOWDEFAULT;
 
         std::vector<char> cmdBuf(cmd.begin(), cmd.end());
         cmdBuf.push_back(0);
 
-        if (!CreateProcessA(NULL, cmdBuf.data(), NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi)) {
+        BOOL success = CreateProcessA(NULL, cmdBuf.data(), NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+
+        if (!success) {
             std::cerr << "[Process] Failed to start SimWorker." << std::endl;
             return penalty;
         }
 
-        // 4. 等待 (超时控制)
+        // 4. 等待
         DWORD waitResult = WaitForSingleObject(pi.hProcess, timeoutMs);
 
         if (waitResult == WAIT_TIMEOUT) {
-            // 【超时】 -> 物理毁灭 (显存必释放)
-            std::cout << " [Timeout] Killing process..." << std::endl;
+            std::cout << " [Timeout] SimWorker stuck! Killing process..." << std::endl;
             TerminateProcess(pi.hProcess, 1);
         }
         else {
-            // 【正常退出】 -> 读取结果
             std::ifstream in(outputFile);
             if (in.is_open()) {
-                in >> penalty; // 读取计算出的误差
-            }
-            else {
-                std::cerr << " [Error] No output file generated." << std::endl;
+                in >> penalty;
             }
         }
 
-        // 5. 清理句柄
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         return penalty;
