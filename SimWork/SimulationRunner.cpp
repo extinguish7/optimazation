@@ -57,8 +57,8 @@ void SimulationRunner::loadStentModel(std::vector<Simulation::Model*>& models) {
 
 	std::string nodePath, compressedNodePath, elePath, historyPath;
     
-    // 根据 Config 拼接路径
-    std::string stentPath = "D:/BayesOptDataSet/stent/";
+    // 根据 Config 传递路径
+    std::string stentPath = m_config.stentRoot; // 使用相对路径
 
     switch (m_config.stentType) {
     case StentType::VenusA_L32:
@@ -69,7 +69,8 @@ void SimulationRunner::loadStentModel(std::vector<Simulation::Model*>& models) {
         break;
 	case StentType::VenusA_L26:
 		nodePath = stentPath + "VenusA26_Y.node";
-		compressedNodePath = stentPath + "VenusA26_compressed_D8mm_Y.node";
+        compressedNodePath = stentPath + "VenusA26_compressed_D8mm_Y.node";
+        //compressedNodePath = stentPath + "VenusA26_compressed_D8mm_Y_test.node";
 		elePath = stentPath + "VenusA26_Y.ele";
 		historyPath = stentPath + "2.0000_stent_NULL_L26.dat";
 		break;
@@ -194,6 +195,7 @@ double SimulationRunner::run(const std::vector<double>& normalizedParams) {
 
 	// 5. 运行仿真循环
     double stopTime = 14.0;
+    //double stopTime = 2.0;
     double currentTime = 0.0;
     double TIMESTEP = engine->get_time_step();
     int nTimeStep = 0;
@@ -236,6 +238,7 @@ double SimulationRunner::run(const std::vector<double>& normalizedParams) {
 
     // 假设输出结果路径为 resultObjPath
     std::string resultObjPath = m_config.outputRoot + "output/Obj/14.0000_stent.obj"; // 简化示例
+    //std::string resultObjPath = m_config.outputRoot + "output/Obj/2.0000_stent.obj"; // 简化示例
 
     // 6. 计算误差 (根据 Config 决定策略)
     double totalError = 0.0;
@@ -386,4 +389,3 @@ bool SimulationRunner::exportElasticModulusToTecplot(
     std::cout << "[Export] Tecplot file saved: " << filename << std::endl;
     return true;
 }
-

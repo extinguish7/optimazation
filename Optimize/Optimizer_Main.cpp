@@ -16,6 +16,7 @@
 #include "Utils/ProcessUtils.h"
 #include "Utils/OptimizationLogger.h"
 #include "Common.h"
+#include "Utils/PathUtils.h"
 
 // 使用命名空间
 using namespace libcmaes;
@@ -369,13 +370,22 @@ int main() {
     SetConsoleTitleA("Optimizer - Batch Manager");
     system("chcp 65001>nul");
 
-    const std::string DATASET_ROOT = "D:/BayesOptDataSet/patient/";
-    const std::string WORKER_EXE = "SimWorker.exe";
-    const int TIMEOUT_MS = 900000; // 15分钟超时
+    // [修改] 动态生成数据根目录
+    // 假设数据放在 EXE 同级目录下的 data/patient/
+    std::string exeDir = PathUtils::getExeDir();
+    const std::string DATASET_ROOT = exeDir + "data/patient/";
+
+    // WORKER_EXE 也可以写成绝对路径以防万一
+    const std::string WORKER_EXE = exeDir + "SimWorker.exe";
+
+    const int TIMEOUT_MS = 900000;
     const int MAX_GENERATIONS = 1000;
 
+    // 检查目录是否存在
     if (!fs::exists(DATASET_ROOT)) {
-        std::cerr << "Error: Dataset root not found: " << DATASET_ROOT << std::endl;
+        std::cerr << "[Error] Data root not found: " << DATASET_ROOT << std::endl;
+        std::cerr << "Please make sure you have a 'data/patient' folder next to the exe." << std::endl;
+        getchar();
         return -1;
     }
 

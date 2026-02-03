@@ -6,6 +6,7 @@
 #include "Core/SimulationRunner.h"
 #include "Core/MaterialMapper.h"
 #include "Common.h"
+#include "../Optimize/Utils/PathUtils.h"
 
 // 辅助：字符串转枚举
 Simulation::StentType parseStentType(const std::string& typeStr) {
@@ -54,6 +55,10 @@ int main(int argc, char* argv[]) {
         config.vesselExpandedPath = config.meshRoot + "aorta_expanded.inp";
         // 假设目标STL文件名也是统一的，或者根据实际情况修改
         config.targetMeshPath = config.meshRoot + "target_stent.stl";
+
+        // [新增] 动态计算支架目录：Exe目录 + data/stent/
+        std::string exeDir = PathUtils::getExeDir();
+        config.stentRoot = exeDir + "data/stent/";
 
         // [修改] 动态设置支架类型
         config.stentType = parseStentType(stentTypeStr);

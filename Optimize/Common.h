@@ -17,11 +17,14 @@ struct ParameterSpec {
 struct SimulationConfig {
     std::string meshRoot;
     std::string outputRoot;
-    std::string vesselInpPath;        // 原始血管 INP
-    std::string vesselExpandedPath;   // 扩张后血管 INP (如果需要)
+
+    // [新增] 支架库的根目录 (用于动态定位 stent 文件)
+    std::string stentRoot;
+
+    std::string vesselInpPath;
+    std::string vesselExpandedPath;
     Simulation::StentType stentType;
 
-    // 优化目标设置
-    bool useHausdorff = false;        // 是否使用 Hausdorff 距离作为误差
-    std::string targetMeshPath;       // 如果使用 Hausdorff，需要真实血管的 STL/OBJ 路径
+    bool useHausdorff = false;
+    std::string targetMeshPath;
 };
