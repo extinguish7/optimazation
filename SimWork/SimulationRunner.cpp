@@ -1,7 +1,7 @@
 // Core/SimulationRunner.cpp
 
 #include "SimulationRunner.h"
-#include "../Utils/GeometryUtils.h"
+#include "GeometryUtils.h"
 #include "solver/TetModel.h"
 #include "Utils/IglUtils.h" // 假设你有这个用于导出的工具
 #include <sstream>
@@ -12,9 +12,11 @@
 #include <atomic>
 #include <chrono>
 #include <memory> // for std::shared_ptr
-
+#include <filesystem>
+#include <vtkOBJWriter.h>
 
 using namespace Simulation;
+namespace fs = std::filesystem;
 
 SimulationRunner::SimulationRunner(const SimulationConfig& config)
 	: m_config(config) {}
@@ -103,6 +105,30 @@ void SimulationRunner::loadStentModel(std::vector<Simulation::Model*>& models) {
 
 }
 
+// [新增] 辅助函数：获取特定支架的切片高度列表
+std::vector<double> getStandardSliceHeights(StentType type) {
+    std::vector<double> heights;
+    // 假设支架中心在 Y=0，根据长度分布切片
+    // 注意：这里的单位是 mm
+    switch (type) {
+    case StentType::VenusA_L32: // 长32mm
+        heights = { -6.0, 18.4, 35.4 };
+        break;
+    case StentType::VenusA_L29: // 长29mm
+        heights = { -5.0, 17.3, 35.3 };
+        break;
+    case StentType::VenusA_L26: // 长26mm
+        heights = { -4.5, 16.9, 35.9 };
+        break;
+    case StentType::VenusA_L23: // 长23mm
+        heights = { -7.0, 8.0, 27.5 };
+        break;
+    default: // 默认 L26
+        heights = { -4.5, 16.9, 35.9 };
+        break;
+    }
+    return heights;
+}
 
 double SimulationRunner::run(const std::vector<double>& normalizedParams) {
     // 1. 动态解析参数 (不再硬编码索引)
@@ -240,54 +266,90 @@ double SimulationRunner::run(const std::vector<double>& normalizedParams) {
     std::string resultObjPath = m_config.outputRoot + "output/Obj/14.0000_stent.obj"; // 简化示例
     //std::string resultObjPath = m_config.outputRoot + "output/Obj/2.0000_stent.obj"; // 简化示例
 
-    // 6. 计算误差 (根据 Config 决定策略)
-    double totalError = 0.0;
+    // =========================================================
+    // 2. 后处理与误差计算 (Heavy Modification)
+    // =========================================================
+    double totalLoss = 0.0;
 
+    // A. 加载
+    auto simPoly = GeometryUtils::loadOBJ(resultObjPath);
+    auto targetPoly = GeometryUtils::loadSTL(m_config.targetMeshPath);
+    if (!simPoly || !targetPoly) { return 1e9; }
+
+    // B. 对齐
+    //auto alignedTarget = GeometryUtils::alignToCentroid(targetPoly, simPoly);
+    auto alignedTarget = GeometryUtils::alignToICP(targetPoly, simPoly);
+
+    if (alignedTarget) {
+        // 使用 fs::path 拼接路径，确保跨平台斜杠安全
+        std::string alignedOutPath = (fs::path(m_config.outputRoot) / "output/aligned_target.obj").string();
+
+        vtkSmartPointer<vtkOBJWriter> writer = vtkSmartPointer<vtkOBJWriter>::New();
+        writer->SetFileName(alignedOutPath.c_str());
+        writer->SetInputData(alignedTarget);
+        writer->Write();
+    }
+
+    // C. Hausdorff (可选)
     if (m_config.useHausdorff) {
-        // [新增] Hausdorff 模式
-        if (m_config.targetMeshPath.empty()) {
-            std::cerr << "Hausdorff mode enabled but no target mesh provided!" << std::endl;
-            return 1e9;
-        }
-        // 调用新的配准与计算函数
-		std::string savedRegisteredPath = m_config.outputRoot + "registered_target.stl";
-        auto metrics = GeometryUtils::computeRegistrationAndError(resultObjPath, m_config.targetMeshPath, savedRegisteredPath);
-
-        // 策略选择：
-        // 1. 如果你希望尽量减少整体形状差异，用 RMSE (推荐)
-        // 2. 如果你希望尽量贴合表面，用 Mean
-        // 3. 也可以加权： 0.7 * Mean + 0.3 * Max (既看整体也不放过极端错误)
-        totalError = 0.8 * metrics.rmse + 0.2 * metrics.maxDistance;
-
-        // 打印调试信息，方便看 Log 知道配准效果
-        std::cout << "  [Eval] Max: " << metrics.maxDistance
-            << ", Mean: " << metrics.meanDistance
-            << ", RMSE: " << metrics.rmse << std::endl;
-    }
-    else {
-        // [原有] 切片椭圆拟合模式
-        for (const auto& target : m_sliceTargets) {
-            GeometryUtils::EllipseData simData;
-            bool ok = GeometryUtils::computeSliceAndFit(resultObjPath,
-                Eigen::Vector3d(0, target.yHeight, 0),
-                Eigen::Vector3d(0, 1, 0), simData);
-
-            if (ok) {
-                // 加权求和
-                totalError += std::abs((target.targetArea - simData.area) / target.targetArea);
-                // ... 其他指标 ...
-            }
-            else {
-                totalError += 10.0;
-            }
-        }
+        auto metrics = GeometryUtils::computeErrors(alignedTarget, simPoly);
+        totalLoss += 0.2 * metrics.rmse; 
     }
 
-    // 清理内存
+    // D. 切片计算 & 导出
+    std::vector<double> sliceHeights = getStandardSliceHeights(m_config.stentType);
+    int validSlices = 0;
+    double sliceLossSum = 0.0;
+
+    std::string baseName = fs::path(resultObjPath).stem().string(); 
+    std::string outDir = fs::path(resultObjPath).parent_path().string();
+
+    for (size_t i = 0; i < sliceHeights.size(); ++i) {
+        double h = sliceHeights[i];
+        Eigen::Vector3d origin(0, h, 0);
+        Eigen::Vector3d normal(0, 1, 0);
+
+        GeometryUtils::ProfileData simProfile, targetProfile;
+        bool simOk = GeometryUtils::computeSliceAndFit(simPoly, origin, normal, simProfile);
+        bool targetOk = GeometryUtils::computeSliceAndFit(alignedTarget, origin, normal, targetProfile);
+
+        if (simOk && targetOk) {
+            // 1. 构造文件名
+            std::string prefix = outDir + "/" + baseName + "_slice_" + std::to_string(i);
+            
+            // 2. 导出 CSV 数据
+            GeometryUtils::saveProfileToCSV(prefix + "_sim.csv", simProfile);
+            GeometryUtils::saveProfileToCSV(prefix + "_truth.csv", targetProfile);
+
+            // 3. [新增] 导出可视化模型 (OBJ)
+            GeometryUtils::saveProfileGeometry(prefix + "_sim.obj", simProfile);
+            GeometryUtils::saveProfileGeometry(prefix + "_truth.obj", targetProfile);
+
+            // 4. 计算 Loss (保持之前逻辑)
+            double sumSqDiff = 0.0;
+            for (int k = 0; k < 360; ++k) {
+                double diff = simProfile.radii[k] - targetProfile.radii[k];
+                sumSqDiff += diff * diff;
+            }
+            double radRMSE = std::sqrt(sumSqDiff / 360.0);
+            double areaPenalty = std::abs(simProfile.area - targetProfile.area) / (targetProfile.area + 1e-6);
+
+            sliceLossSum += (1.0 * radRMSE + 2.0 * areaPenalty);
+            validSlices++;
+        } else {
+            sliceLossSum += 10.0;
+        }
+    }
+
+    if (validSlices > 0) totalLoss += sliceLossSum / validSlices;
+    else totalLoss += 100.0;
+
+    // 清理
     delete engine;
     for (auto m : models) delete m;
 
-    return totalError;
+    return totalLoss;
+
 }
 
 bool SimulationRunner::exportElasticModulusToTecplot(
